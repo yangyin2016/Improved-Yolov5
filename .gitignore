@@ -1,0 +1,8 @@
+*.pt
+*__pycache__*
+*password*
+runs/*
+*vscode*
+*.jpg
+*.png
+*.txt
