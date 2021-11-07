@@ -27,6 +27,8 @@ from utils.general import check_requirements, check_file, check_dataset, xywh2xy
     xyn2xy, segment2box, segments2boxes, resample_segments, clean_str
 from utils.torch_utils import torch_distributed_zero_first
 
+from script.exposure import addExposure
+
 # Parameters
 help_url = 'https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
 img_formats = ['bmp', 'jpg', 'jpeg', 'png', 'tif', 'tiff', 'dng', 'webp', 'mpo']  # acceptable image suffixes
@@ -553,6 +555,20 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         nL = len(labels)  # number of labels
         if nL:
             labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0])  # xyxy to xywh normalized
+
+        # 添加随机局部曝光(参数均为经验值)
+        if True:
+            height, width, _ = img.shape
+            for label in labels:
+                if random.random() > 0.5:
+                    x, y, w, h = label[1:5]
+                    x, w = x * width, w * width
+                    y, h = y * height, h * height
+                    center_x = int(np.random.randint(-w // 2, w // 2) + x)
+                    center_y = int(np.random.randint(-h // 2, h // 2) + y)
+                    radius = int(min(w, h))
+                    strength = np.random.randint(255, 400)
+                    img = addExposure(img, (center_x, center_y), radius, strength)
 
         if self.augment:
             # flip up-down
