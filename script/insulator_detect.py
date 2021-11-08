@@ -74,30 +74,48 @@ def extractEdge(img_binary):
 
     return left_edge, right_edge
 
+def calNumOfPieces(img_gray, left_edge, right_edge):
+    # description:根据绝缘子串的灰度图和其左右边缘计算其绝缘子片的数量
+
+    def filter(data, ratio=0.2):
+        # description:一个简单的低通滤波
+        if len(data) == 0:
+            return data
+        prev_value = data[0]
+        data_ret = data.copy()
+        for i in range(len(data)):
+            data_ret[i] = ratio * data_ret[i] + (1 - ratio) * prev_value
+            prev_value = data[i]
+        return data_ret
+
+    # 计算灰度曲线
+    left_edge = np.array(left_edge)
+    right_edge = np.array(right_edge)
+    mid_edge = (left_edge + right_edge) // 2
+    gray_value = img_gray[mid_edge[:, 1], mid_edge[:, 0]]   # 中线上的灰度值
+    gray_value_filted = filter(gray_value, ratio=0.01)
+
+    plt.figure(figsize=(15, 7))
+    plt.subplot(1, 2, 1)
+    plt.plot(gray_value)
+    plt.subplot(1, 2, 2)
+    plt.plot(gray_value_filted)
+    plt.show()
+
+    return 10
+
 def main(opt):
     path, show = opt.path, opt.show
     img_names = os.listdir(path)
 
     for img_name in img_names:
         img = cv2.imread(os.path.join(path, img_name))
-        img_gray, img_binary = preProcess(img)
         t1 = timer()
+        img_gray, img_binary = preProcess(img)
         left_edge, right_edge = extractEdge(img_binary) 
+        num = calNumOfPieces(img_gray, left_edge, right_edge)
         t2 = timer()
-        print("cost timer:{}".format(t2 - t1))
-
-        for i in range(len(left_edge)):
-            cv2.circle(img, left_edge[i], 0, (255, 0, 0), 0)
-            cv2.circle(img, right_edge[i], 0, (255, 0, 0), 0)
-
-        if show:
-            plt.subplot(2, 2, 1)
-            plt.imshow(img)
-            plt.subplot(2, 2, 2)
-            plt.imshow(img_gray, cmap="gray")
-            plt.subplot(2, 2, 3)
-            plt.imshow(img_binary, cmap="binary")
-            plt.show()
+        print("total cost timer:{}".format(t2 - t1))
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="检测绝缘子串")
