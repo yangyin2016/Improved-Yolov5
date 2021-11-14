@@ -102,6 +102,13 @@ def findMidLine(left_edge, right_edge):
 
     return mid_line_detected, mid_line_fitted
 
+def split(img):
+    # description:将绝缘子串从图像中分割出来
+
+    img_gray, img_binary = preProcess(img)
+    img[np.where(img_binary == 0)] = 0
+    return img
+
 
 def calDeviation(width, mid_line_detected, mid_line_fitted):
     # description:计算理论中线与实际中线的偏离程度
@@ -161,7 +168,7 @@ def main(opt):
         if not img_name.endswith(".jpg"):
             continue
         img = cv2.imread(os.path.join(path, img_name))
-        t1 = timer()
+        """t1 = timer()
 
         img_gray, img_binary = preProcess(img)
         left_edge, right_edge = extractEdge(img_binary) 
@@ -182,11 +189,10 @@ def main(opt):
             cv2.circle(img, mid_line_detected[i], 1, (0, 255, 0), 1)
             cv2.circle(img, mid_line_fitted[i], 1, (255, 0, 0), 1)
         cv2.imwrite(os.path.join(output, img_name), img) 
-        #cv2.imwrite(os.path.join(output, "{}".format(deviation)) + ".jpg", img)
-        #plt.imshow(img)
-        #plt.show()
+        """
+        img = split(img)
+        cv2.imwrite(os.path.join("output", img_name), img) 
         
-
 if __name__ == "__main__":
     parser = ArgumentParser(description="检测绝缘子串")
     parser.add_argument("--path", type=str, default="images", help="图片路径")
