@@ -33,10 +33,10 @@ class DataAugment:
         new_img = np.where(new_img<0, 0, new_img)
 
         # 5.随机亮度变化
-        alpha = int(np.random.uniform(-10, 64))
-        new_img += alpha
-        new_img = np.where(new_img>255, 255, new_img)
-        new_img = np.where(new_img<0, 0, new_img)
+        #alpha = int(np.random.uniform(-10, 64))
+        #new_img += alpha
+        #new_img = np.where(new_img>255, 255, new_img)
+        #new_img = np.where(new_img<0, 0, new_img)
 
         # 6.随机饱和度变换
         alpha = np.random.uniform(0.7, 1.3)
@@ -45,10 +45,10 @@ class DataAugment:
         new_img = np.where(new_img<0, 0, new_img)
 
         # 7.添加椒盐噪声
-        noise = np.random.random((new_img.shape[:2])) 
-        alpha = np.random.uniform(0.98, 1.0)
-        new_img[noise>alpha] = 255
-        alpha = np.random.uniform(0.98, 1.0)
-        new_img[noise>alpha] = 0
+        #noise = np.random.random((new_img.shape[:2])) 
+        #alpha = np.random.uniform(0.98, 1.0)
+        #new_img[noise>alpha] = 255
+        #alpha = np.random.uniform(0.98, 1.0)
+        #new_img[noise>alpha] = 0
 
         return new_img.astype(np.uint8)
