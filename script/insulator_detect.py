@@ -7,6 +7,7 @@ from timeit import default_timer as timer
 from argparse import ArgumentParser
 
 from ransac import line_fitting
+from utils import *
 
 def preProcess(img):
     # description:解析输入的图片路径，给出路径中可用的图像数据
@@ -35,9 +36,9 @@ def preProcess(img):
 
     return img_gray, img_binary
 
-def extractEdge(img_binary):
-    # description:分割绝缘子串，提取左右边缘坐标
-    # return:[左侧边缘坐标，右侧边缘坐标]
+def detectEdge(img_binary):
+    # description:分割绝缘子串，提取左右边缘坐标，计算中线坐标
+    # return:[左侧边缘坐标，右侧边缘坐标，中线坐标]
 
     left_edge = []
     right_edge = []
@@ -75,32 +76,33 @@ def extractEdge(img_binary):
             continue
         left_edge.append([total_points[row][0], row])
         right_edge.append([total_points[row][1], row])
-
-    return left_edge, right_edge
-
-def findMidLine(left_edge, right_edge):
-    # description:寻找绝缘子串的实际中线与理论中线
+    
+    # 计算中线
     if len(left_edge) != len(right_edge):
-        return [], []
+        return left_edge, right_edge, []
     n = len(left_edge)
     mid_line_detected = []
-    mid_line_fitted = []
-    
+
     for i in range(n):
         mid_line_detected.append([(left_edge[i][0] + right_edge[i][0]) // 2, \
                 (left_edge[i][1] + right_edge[i][1]) // 2])
+    return left_edge, right_edge, mid_line_detected
+ 
+def fitLine(line, max_iterations=30, stop_at_goal=True, random_seed=0):
+    # 拟合线段
+    # 返回：直线参数，拟合后的线段坐标
 
-    # 使用RANSAC拟合
+    n = len(line)
+    line_fitted = []
     goal_inliers = max(100, int(0.6 * n))
-    m = line_fitting(mid_line_detected, threshold=0.01, sample_size=int(0.05 * n), goal_inliers=goal_inliers, \
-                    max_iterations=30, stop_at_goal=True, random_seed=0)
+    m = line_fitting(line, threshold=0.01, sample_size=int(0.05 * n), goal_inliers=goal_inliers, \
+                    max_iterations=max_iterations, stop_at_goal=stop_at_goal, random_seed=random_seed)
     k = -m[0] / (m[1] + 1e-8)
     b = -m[2] / (m[1] + 1e-8)
-    print("k:{}, b:{}".format(k, b))
     for i in range(n):
-        mid_line_fitted.append([int((mid_line_detected[i][1] - b) // k), mid_line_detected[i][1]])
+        line_fitted.append([int((line[i][1] - b) // k), line[i][1]])
 
-    return mid_line_detected, mid_line_fitted
+    return k, b, line_fitted
 
 def split(img):
     # description:将绝缘子串从图像中分割出来
@@ -127,25 +129,9 @@ def calDeviation(width, mid_line_detected, mid_line_fitted):
 def calNumOfPieces(img_gray, left_edge, right_edge):
     # description:根据绝缘子串的灰度图和其左右边缘计算其绝缘子片的数量
 
-    def lowPassFilter(data, ratio=0.2):
-        # description:一个简单的低通滤波
-        if len(data) == 0:
-            return data
-        prev_value = data[0]
-        data_ret = data.copy()
-        for i in range(len(data)):
-            data_ret[i] = ratio * data_ret[i] + (1 - ratio) * prev_value
-            prev_value = data_ret[i]
-        return data_ret
-
-    def derivative(data):
-        # description:一个基本的求导功能实现
-        if len(data) == 0:
-            return data
-        data_ret = []
-        for i in range(1, len(data) - 1):
-            data_ret.append((int(data[i + 1]) - int(data[i - 1])) / 2)
-        return data_ret
+    # 图像锐化
+    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], np.float32)
+    img_gray = cv2.filter2D(img_gray, -1, kernel)
 
     # 计算灰度曲线并滤波
     left_edge = np.array(left_edge)
@@ -153,49 +139,48 @@ def calNumOfPieces(img_gray, left_edge, right_edge):
     mid_edge = (left_edge + right_edge) // 2
 
     gray_value = img_gray[mid_edge[:, 1], mid_edge[:, 0]]   # 中线上的灰度值
-    gray_value_filted = lowPassFilter(gray_value, ratio=0.1)
 
     # 求导
-    deriva = derivative(gray_value_filted) 
+    gray_value_filted = medianFilter(gray_value, 3)
+    num = calNumOfMaximumValue(gray_value, size=10)
+    
+    print("片数:{}".format(num))
+    # 显示
+    if True:
+        plt.figure(figsize=(15, 7))
+        plt.subplot(1, 3, 1)
+        plt.imshow(img_gray)
+        plt.subplot(1, 3, 2)
+        plt.plot(gray_value)
+        plt.subplot(1, 3, 3)
+        plt.plot(gray_value_filted)
+        plt.show()
         
     return 10
 
 def main(opt):
-    path, show = opt.path, opt.show
+    path, output, show = opt.path, opt.output, opt.show
     img_names = os.listdir(path)
 
     for img_name in img_names:
         if not img_name.endswith(".jpg"):
             continue
         img = cv2.imread(os.path.join(path, img_name))
-        """t1 = timer()
+        t1 = timer()
 
         img_gray, img_binary = preProcess(img)
-        left_edge, right_edge = extractEdge(img_binary) 
-        num = calNumOfPieces(img_gray, left_edge, right_edge)
-        mid_line_detected, mid_line_fitted = findMidLine(left_edge, right_edge)
-        deviation = calDeviation(img.shape[1], mid_line_detected, mid_line_fitted)
-        print("devitation:{}".format(deviation))
+        left_edge, right_edge, mid_line = detectEdge(img_binary) 
+        k, b, mid_line_fitted = fitLine(mid_line)
+        calNumOfPieces(img_gray, left_edge, right_edge)
 
+       
         t2 = timer()
         print("total cost timer:{}".format(t2 - t1))
 
-        output = "output"
-        # 绘图
-        for i in range(len(left_edge)):
-            cv2.circle(img, left_edge[i], 0, (0, 0, 255), 3)
-            cv2.circle(img, right_edge[i], 0, (0, 0, 255), 3)
-        for i in range(len(mid_line_detected)):
-            cv2.circle(img, mid_line_detected[i], 1, (0, 255, 0), 1)
-            cv2.circle(img, mid_line_fitted[i], 1, (255, 0, 0), 1)
-        cv2.imwrite(os.path.join(output, img_name), img) 
-        """
-        img = split(img)
-        cv2.imwrite(os.path.join("output", img_name), img) 
         
 if __name__ == "__main__":
     parser = ArgumentParser(description="检测绝缘子串")
-    parser.add_argument("--path", type=str, default="images", help="图片路径")
+    parser.add_argument("--path", type=str, default="test_data/normal", help="图片路径")
     parser.add_argument("--output", type=str, default="output", help="图片保存路径")
     parser.add_argument("--show", action='store_true', help="显示检测效果")
 
