@@ -107,11 +107,11 @@ class DataAugment:
             return img
 
         img = self.randomFlip(img, axis_x=True, axis_y=True)
-        img = self.randomResize(img, lower=0.7, upper=1.3)
-        img = self.randomBrightness(img, lower=0, upper=30, is_splited=True)
+        img = self.randomResize(img, lower=0.65, upper=1.35)
+        img = self.randomBrightness(img, lower=0, upper=50, is_splited=True)
         img = self.randomContrast(img, lower=0.7, upper=1.3)
         img = self.randomSaturation(img, lower=0.7, upper=1.3)
-        img = self.randomSpNoise(img, lower=0.02, upper=0.98)
+        img = self.randomSpNoise(img, lower=0.025, upper=0.975)
         img = self.randomGaussNoise(img, mean=0, var=0.0025)
         if np.random.rand() > 0.5:
             img = self.whiteBalance(img)
