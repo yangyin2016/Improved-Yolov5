@@ -1,8 +1,10 @@
 # 本文将实现了模拟过曝行为的函数
 
 import cv2
+import os
 import numpy as np
 from timeit import default_timer as timer
+from argparse import ArgumentParser
 
 def createExposureKernel(radius=50, strength=100, expand_dim=True):
     # description:创造一个曝光核，可以直接添加在图像上模仿曝光效果
@@ -33,22 +35,67 @@ def addExposure(img, center, radius, strength):
 
     # 检测有效输入
     center_x, center_y = center
-    if (center_x < radius) or (center_y < radius) or \
-            (center_x + radius >= img.shape[1]) or (center_y + radius >= img.shape[0]):
+    if center_x < 0 or center_x >= img.shape[1] or center_y < 0 or center_y >= img.shape[0]:
         return img
 
-    # 添加曝光
+    # 如果半径过大，则对其进行裁剪
     exposure_kernel = createExposureKernel(radius, strength)
+    x1, x2 = center_x -radius, center_x + radius + 1
+    y1, y2 = center_y - radius, center_y + radius + 1
+    if x1 < 0:
+        exposure_kernel = np.delete(exposure_kernel, range(0, -x1), axis=1)
+        x1 = 0
+    if y1 < 0:
+        exposure_kernel = np.delete(exposure_kernel, range(0, -y1), axis=0)
+        y1 = 0
+    if x2 > img.shape[1]:
+        exposure_kernel = np.delete(exposure_kernel, range(img.shape[1] - x1, exposure_kernel.shape[1]), axis=1)
+        x2 = img.shape[1]
+    if y2 > img.shape[0]:
+        exposure_kernel = np.delete(exposure_kernel, range(img.shape[0] - y1, exposure_kernel.shape[0]), axis=0)
+        y2 = img.shape[0]
+    
+    # 添加曝光
     img = img.astype(np.uint16)
-    img[center_y - radius : center_y + radius + 1, center_x - radius : center_x + radius + 1] += exposure_kernel 
-    img = np.where(img>255, 255, img)
+    img[y1 : y2, x1 : x2] += exposure_kernel
+    img[img>255] = 255
 
     return img.astype(np.uint8)
 
+def main(opt):
+    input_path, output_path, num = opt.input_path, opt.output_path, opt.num
+
+    np.random.seed(0)
+    data_name = os.listdir(input_path) 
+    n = 0
+    for name in data_name:
+        if not name.endswith((".jpg", ".png")):
+            continue
+        path = os.path.join(input_path, name)
+        img = cv2.imread(path)
+        height, width, _ = img.shape 
+
+        for i in range(0, num):
+            img_exposured = img.copy()
+
+            # 随机位置、随机半径、随机强度
+            center_x, center_y = np.random.randint(0, width), np.random.randint(0, height)
+            radius = int(np.random.randint(min(height, width) // 2, min(height, width) * 1.3))
+            strength = int(np.random.randint(255, 400))
+            img_exposured = addExposure(img_exposured, (center_x, center_y), radius, strength)
+
+            # 保存
+            prefix, suffix = name.split('.')
+            output_name = os.path.join(output_path, prefix + "_{}.".format(i) + suffix)
+            cv2.imwrite(output_name, img_exposured)
+            print("输入位置:{},曝光位置:{},曝光半径:{},曝光强度:{},输出位置:{}".format(
+                input_path, (center_x, center_y), radius, strength, output_name))
+            n += 1
+    print("一共处理{}张图片".format(n))
+
 if __name__ == "__main__":
-    img = cv2.imread("test.jpg")
-    h, w, _ = img.shape
-    img = addExposure(img, (300, 300), 100, 400)
-    cv2.imshow("img", img)
-    cv2.imwrite("output.jpg", img)
-    cv2.waitKey(0)
+    parser = ArgumentParser("给图片添加曝光效果")
+    parser.add_argument("--input_path", type=str, default="./test_data", help="原始图片路径")
+    parser.add_argument("--output_path", type=str, default="output", help="输出图片的路径")
+    parser.add_argument("--num", type=int, default=1, help="对每张图片的过曝次数")
+    main(parser.parse_args())
