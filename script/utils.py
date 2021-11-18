@@ -1,5 +1,7 @@
 # 一些基本算法的实现
 import scipy.signal as signal
+import matplotlib.pyplot as plt
+import numpy as np
 
 def lowPassFilter(data, ratio=0.2):
     # description:一个简单的低通滤波
@@ -25,4 +27,20 @@ def derivative(data):
         data_ret.append((int(data[i + 1]) - int(data[i - 1])) / 2)
     return data_ret
 
+def calNumOfMaximumValue(data, size=10):
+    # 计算极大值点的数量
+    peak_indexes = signal.argrelextrema(data, np.greater, order=size)  
+    return peak_indexes[0].shape[0]
 
+def uShow(data):
+    # 显示图片
+    n = len(data)
+    plt.figure(figsize=(15, 7))         
+
+    for i in range(0, n):
+        plt.subplot(1, n, i + 1)
+        if type(data[i]) == np.ndarray:
+            plt.imshow(data[i])
+        elif type(data[i]) == list:
+            plt.plot(data[i])
+    plt.imshow()
