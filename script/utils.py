@@ -30,7 +30,7 @@ def derivative(data):
 def calNumOfMaximumValue(data, size=10):
     # 计算极大值点的数量
     peak_indexes = signal.argrelextrema(data, np.greater, order=size)  
-    return peak_indexes[0].shape[0]
+    return peak_indexes[0]
 
 def uShow(data):
     # 显示图片
