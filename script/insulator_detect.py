@@ -15,7 +15,7 @@ def preProcess(img):
 
     # 滤波、二值化
     img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    #img_gray = cv2.GaussianBlur(img_gray, (5, 5), 0)
+    #img_gray = cv2.add(img_gray, -30)
     thresh, img_binary = cv2.threshold(img_gray, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)
 
     # 形态学操作
@@ -90,19 +90,27 @@ def detectEdge(img_binary):
  
 def fitLine(line, max_iterations=30, stop_at_goal=True, random_seed=0):
     # 拟合线段
-    # 返回：直线参数，拟合后的线段坐标
+    # 返回：直线参数，拟合后的线段坐标，以及拟合线段和原线段的平方差
 
-    n = len(line)
+    line_cropped = line.copy()
+    line_cropped = line_cropped[int(0.1 * len(line_cropped)): int(0.9 * len(line_cropped))]
+    n = len(line_cropped)
     line_fitted = []
+    mse = 0
     goal_inliers = max(100, int(0.6 * n))
-    m = line_fitting(line, threshold=0.01, sample_size=int(0.05 * n), goal_inliers=goal_inliers, \
+    m = line_fitting(line_cropped, threshold=0.01, sample_size=int(0.1 * n), goal_inliers=goal_inliers, \
                     max_iterations=max_iterations, stop_at_goal=stop_at_goal, random_seed=random_seed)
     k = -m[0] / (m[1] + 1e-8)
     b = -m[2] / (m[1] + 1e-8)
-    for i in range(n):
-        line_fitted.append([int((line[i][1] - b) // k), line[i][1]])
 
-    return k, b, line_fitted
+    for i in range(len(line)):
+        x, y = int((line[i][1] - b) // k), line[i][1]
+        line_fitted.append([x, y])
+        if i > 0.1 * n and i < 0.9 * n:
+            mse += np.square((line[i][0] - x))
+    mse /= (0.8 * n)
+
+    return k, b, line_fitted, mse
 
 def split(img):
     # description:将绝缘子串从图像中分割出来
@@ -110,7 +118,6 @@ def split(img):
     img_gray, img_binary = preProcess(img)
     img[np.where(img_binary == 0)] = 0
     return img
-
 
 def calDeviation(width, mid_line_detected, mid_line_fitted):
     # description:计算理论中线与实际中线的偏离程度
@@ -126,7 +133,7 @@ def calDeviation(width, mid_line_detected, mid_line_fitted):
 
     return mse
 
-def calNumOfPieces(img_gray, left_edge, right_edge):
+def calNumOfPieces(img_gray, left_edge, right_edge, mid_line):
     # description:根据绝缘子串的灰度图和其左右边缘计算其绝缘子片的数量
 
     # 图像锐化
@@ -134,49 +141,114 @@ def calNumOfPieces(img_gray, left_edge, right_edge):
     img_gray = cv2.filter2D(img_gray, -1, kernel)
 
     # 计算灰度曲线并滤波
-    left_edge = np.array(left_edge)
-    right_edge = np.array(right_edge)
-    mid_edge = (left_edge + right_edge) // 2
+    mid_line= np.array(mid_line)
+    gray_value = img_gray[mid_line[:, 1], mid_line[:, 0]]   # 中线上的灰度值
 
-    gray_value = img_gray[mid_edge[:, 1], mid_edge[:, 0]]   # 中线上的灰度值
+    # 计算极值点数量
+    gray_value_filted = lowPassFilter(gray_value, ratio=0.4)
+    peak_index = calNumOfMaximumValue(gray_value, size=10)
+    num = peak_index.shape[0]
 
-    # 求导
-    gray_value_filted = medianFilter(gray_value, 3)
-    num = calNumOfMaximumValue(gray_value, size=10)
+    return num, gray_value_filted
+
+def identifyCategory(img):
+    # -1表示缺失，0表示变盘径，1表示单段固定盘径，2表示双段
+    ret = -1
+
+    img_gray, img_binary = preProcess(img)
+    left_edge, right_edge, mid_line = detectEdge(img_binary) 
+    k_m, b_m, mid_line_fitted, mse_m = fitLine(mid_line)
+    num, gray_curve = calNumOfPieces(img_gray, left_edge, right_edge, mid_line) 
+    if num < 9:
+        return -1, -1
     
-    print("片数:{}".format(num))
-    # 显示
-    if True:
-        plt.figure(figsize=(15, 7))
-        plt.subplot(1, 3, 1)
-        plt.imshow(img_gray)
-        plt.subplot(1, 3, 2)
-        plt.plot(gray_value)
-        plt.subplot(1, 3, 3)
-        plt.plot(gray_value_filted)
-        plt.show()
-        
-    return 10
+    k_l, b_l, left_edge_fitted, mse_l = fitLine(left_edge, random_seed=np.random.randint(0, 1024))
+    k_r, b_r, right_edge_fitted, mse_r = fitLine(right_edge, random_seed=np.random.randint(0, 1024))
+    angle_l = np.degrees(np.arctan(k_l))
+    angle_r = np.degrees(np.arctan(k_r))
+
+    # 绝缘子串分类
+    thresh = 5
+    diff = 0
+    if angle_l * angle_r > 0:
+        diff = abs(angle_l - angle_r)
+    else:
+        diff = 180 - abs(angle_l) - abs(angle_r)
+
+    if diff < thresh:
+        ret = 1
+        print("片数:{},角度差:{},类别为固定盘径,中线偏差:{}".format(num, diff, mse_m))
+    else:
+        ret = 0
+        print("片数:{},角度差:{},类别为变盘径,中线偏差:{}".format(num, diff, mse_m))
+
+    # 曝光程度分类
+    base = 0
+    exposure_type = 0
+    if ret == 0:
+        base = 23
+    elif ret == 1:
+        base = 32
+    else:
+        return -1, -1
+
+    thresh_mid = 60
+    if (mse_m < thresh_mid) and (abs(base - num) < 5):
+        exposure_type = 0
+    elif (mse_m > thresh_mid) and (abs(base - num) < 5):
+        exposure_type = 1
+    elif (mse_m > thresh_mid) and (abs(base - num) > 5):
+        exposure_type = -1
+    else:
+        exposure_type = -1
+
+    # 打印输出
+    if exposure_type == 0:
+        print("正常图片");
+    elif exposure_type == -1:
+        print("无法修复")
+    else:
+        print("可以修复")
+
+    # plot
+    for i in range(len(left_edge)):
+        cv2.circle(img, left_edge[i], 1, (0, 255, 0), 1)
+        cv2.circle(img, left_edge_fitted[i], 1, (255, 0, 0), 1)
+        cv2.circle(img, right_edge[i], 1, (0, 255, 0), 1)
+        cv2.circle(img, right_edge_fitted[i], 1, (255, 0, 0), 1)
+        cv2.circle(img, mid_line[i], 1, (255, 0, 0), 1)
+        pass
+    plt.figure(figsize=(15, 7))
+    plt.subplot(1, 3, 1)
+    plt.imshow(img)
+    plt.subplot(1, 3, 2)
+    plt.imshow(img_binary, "binary")
+    plt.subplot(1, 3, 3)
+    plt.plot(gray_curve)
+    #plt.show()
+
+    if diff < thresh:
+        return 1, exposure_type
+    else:
+        return 0, exposure_type
 
 def main(opt):
     path, output, show = opt.path, opt.output, opt.show
     img_names = os.listdir(path)
 
+    N = 0
+    n = 0
     for img_name in img_names:
         if not img_name.endswith(".jpg"):
             continue
+        if img_name.startswith("2"):
+            continue
+        N += 1
         img = cv2.imread(os.path.join(path, img_name))
-        t1 = timer()
-
-        img_gray, img_binary = preProcess(img)
-        left_edge, right_edge, mid_line = detectEdge(img_binary) 
-        k, b, mid_line_fitted = fitLine(mid_line)
-        calNumOfPieces(img_gray, left_edge, right_edge)
-
-       
-        t2 = timer()
-        print("total cost timer:{}".format(t2 - t1))
-
+        category, exposure_type = identifyCategory(img)
+        if exposure_type == 1:
+            n += 1
+    print("准确率:{}".format(n / N))
         
 if __name__ == "__main__":
     parser = ArgumentParser(description="检测绝缘子串")

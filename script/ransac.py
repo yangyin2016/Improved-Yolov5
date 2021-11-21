@@ -37,7 +37,7 @@ def run_ransac(data, estimate, is_inlier, sample_size, goal_inliers,
             best_model = m
             if ic > goal_inliers and stop_at_goal:
                 break
-    print('took iterations:', i+1, 'best model:', best_model, 'explains:', best_ic)
+    #print('took iterations:', i+1, 'best model:', best_model, 'explains:', best_ic)
     return best_model, best_ic
 
 def augment(xys):
