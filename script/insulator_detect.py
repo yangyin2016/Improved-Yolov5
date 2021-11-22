@@ -5,8 +5,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from timeit import default_timer as timer
 from argparse import ArgumentParser
+from tqdm import tqdm
 
-from ransac import line_fitting
+from ransac import *
 from utils import *
 
 def preProcess(img):
@@ -88,29 +89,23 @@ def detectEdge(img_binary):
                 (left_edge[i][1] + right_edge[i][1]) // 2])
     return left_edge, right_edge, mid_line_detected
  
-def fitLine(line, max_iterations=30, stop_at_goal=True, random_seed=0):
+def fitLine(line):
     # 拟合线段
     # 返回：直线参数，拟合后的线段坐标，以及拟合线段和原线段的平方差
 
-    line_cropped = line.copy()
-    line_cropped = line_cropped[int(0.1 * len(line_cropped)): int(0.9 * len(line_cropped))]
-    n = len(line_cropped)
+    n = len(line)
     line_fitted = []
-    mse = 0
-    goal_inliers = max(100, int(0.6 * n))
-    m = line_fitting(line_cropped, threshold=0.01, sample_size=int(0.1 * n), goal_inliers=goal_inliers, \
-                    max_iterations=max_iterations, stop_at_goal=stop_at_goal, random_seed=random_seed)
-    k = -m[0] / (m[1] + 1e-8)
-    b = -m[2] / (m[1] + 1e-8)
+    variance = 0.0
+    k, b = randomSampleConsensus(line[int(0.1 * n) : int(0.9 * n)])
 
-    for i in range(len(line)):
+    for i in range(n):
         x, y = int((line[i][1] - b) // k), line[i][1]
         line_fitted.append([x, y])
         if i > 0.1 * n and i < 0.9 * n:
-            mse += np.square((line[i][0] - x))
-    mse /= (0.8 * n)
+            variance += np.square((line[i][0] - x))
+    variance /= (0.8 * n)
 
-    return k, b, line_fitted, mse
+    return k, b, line_fitted, variance
 
 def split(img):
     # description:将绝缘子串从图像中分割出来
@@ -126,15 +121,16 @@ def calDeviation(width, mid_line_detected, mid_line_fitted):
 
     k = 100
     n = len(mid_line_detected)
-    mse = 0
+    variance = 0
     for i in range(n):
-        mse += np.square(mid_line_fitted[i][0] - mid_line_detected[i][0]) 
-    mse = k * mse / n / np.square(width)
+        variance += np.square(mid_line_fitted[i][0] - mid_line_detected[i][0]) 
+    variance = k * mse / n / np.square(width)
 
-    return mse
+    return variance
 
 def calNumOfPieces(img_gray, left_edge, right_edge, mid_line):
     # description:根据绝缘子串的灰度图和其左右边缘计算其绝缘子片的数量
+    # 返回绝缘子串的片数
 
     # 图像锐化
     kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], np.float32)
@@ -151,86 +147,71 @@ def calNumOfPieces(img_gray, left_edge, right_edge, mid_line):
 
     return num, gray_value_filted
 
-def identifyCategory(img):
-    # -1表示缺失，0表示变盘径，1表示单段固定盘径，2表示双段
-    ret = -1
+def identifyCategory(img, show=False):
+    # 分析绝缘子和过曝特征
+    # return:[insulator_type, exposure_type]
+    #   insulator_type:-1表示缺失，0表示变盘径，1表示固定盘径，2表示双段
+    #   exposure_type:-1表示严重过曝无法修复，0表示正常，1表示轻微过曝可以修复
 
+    insulator_type = -1
+    exposure_type = -1
+
+    # 预处理
     img_gray, img_binary = preProcess(img)
-    left_edge, right_edge, mid_line = detectEdge(img_binary) 
-    k_m, b_m, mid_line_fitted, mse_m = fitLine(mid_line)
-    num, gray_curve = calNumOfPieces(img_gray, left_edge, right_edge, mid_line) 
-    if num < 9:
+    left_edge, right_edge, mid_line_detected = detectEdge(img_binary) 
+    k_m, b_m, mid_line_fitted, variance_m = fitLine(mid_line_detected)
+    pieces, gray_curve = calNumOfPieces(img_gray, left_edge, right_edge, mid_line_detected) 
+    if pieces < 9:
         return -1, -1
     
-    k_l, b_l, left_edge_fitted, mse_l = fitLine(left_edge, random_seed=np.random.randint(0, 1024))
-    k_r, b_r, right_edge_fitted, mse_r = fitLine(right_edge, random_seed=np.random.randint(0, 1024))
+    # 拟合边缘
+    k_l, b_l, left_edge_fitted, variance_l = fitLine(left_edge)
+    k_r, b_r, right_edge_fitted, variance_r = fitLine(right_edge)
     angle_l = np.degrees(np.arctan(k_l))
     angle_r = np.degrees(np.arctan(k_r))
 
-    # 绝缘子串分类
-    thresh = 5
-    diff = 0
+    # 1. 绝缘子串分类
+    # 计算左右边角度差
+    angle_threshold = 5
+    angle_diff = 0
     if angle_l * angle_r > 0:
-        diff = abs(angle_l - angle_r)
+        angle_diff = abs(angle_l - angle_r)
     else:
-        diff = 180 - abs(angle_l) - abs(angle_r)
-
-    if diff < thresh:
-        ret = 1
-        print("片数:{},角度差:{},类别为固定盘径,中线偏差:{}".format(num, diff, mse_m))
+        angle_diff = 180 - abs(angle_l) - abs(angle_r)
+    # 分类
+    if angle_diff < angle_threshold:
+        insulator_type = 1
     else:
-        ret = 0
-        print("片数:{},角度差:{},类别为变盘径,中线偏差:{}".format(num, diff, mse_m))
+        insulator_type = 0
 
-    # 曝光程度分类
-    base = 0
-    exposure_type = 0
-    if ret == 0:
-        base = 23
-    elif ret == 1:
-        base = 32
+    # 2. 曝光程度分类
+    # 计算片数
+    real_pieces = 0
+    if insulator_type== 0:
+        real_pieces = 23
+    elif insulator_type == 1:
+        real_pieces = 32
+    elif insulator_type == 2:
+        pass
     else:
         return -1, -1
 
-    thresh_mid = 60
-    if (mse_m < thresh_mid) and (abs(base - num) < 5):
+    # 分类
+    varience_m_threshold = 60
+    if (variance_m < varience_m_threshold) and (abs(real_pieces - pieces) < 5):
         exposure_type = 0
-    elif (mse_m > thresh_mid) and (abs(base - num) < 5):
+    elif (variance_m > varience_m_threshold) and (abs(real_pieces - pieces) < 5):
         exposure_type = 1
-    elif (mse_m > thresh_mid) and (abs(base - num) > 5):
+    elif (variance_m > varience_m_threshold) and (abs(real_pieces - pieces) > 5):
         exposure_type = -1
     else:
         exposure_type = -1
 
-    # 打印输出
-    if exposure_type == 0:
-        print("正常图片");
-    elif exposure_type == -1:
-        print("无法修复")
-    else:
-        print("可以修复")
+    # 3. plot
+    if show:
+        quickShow(img, [left_edge, left_edge_fitted, right_edge, right_edge_fitted], show=show)
 
-    # plot
-    for i in range(len(left_edge)):
-        cv2.circle(img, left_edge[i], 1, (0, 255, 0), 1)
-        cv2.circle(img, left_edge_fitted[i], 1, (255, 0, 0), 1)
-        cv2.circle(img, right_edge[i], 1, (0, 255, 0), 1)
-        cv2.circle(img, right_edge_fitted[i], 1, (255, 0, 0), 1)
-        cv2.circle(img, mid_line[i], 1, (255, 0, 0), 1)
-        pass
-    plt.figure(figsize=(15, 7))
-    plt.subplot(1, 3, 1)
-    plt.imshow(img)
-    plt.subplot(1, 3, 2)
-    plt.imshow(img_binary, "binary")
-    plt.subplot(1, 3, 3)
-    plt.plot(gray_curve)
-    #plt.show()
-
-    if diff < thresh:
-        return 1, exposure_type
-    else:
-        return 0, exposure_type
+    return insulator_type, exposure_type
 
 def main(opt):
     path, output, show = opt.path, opt.output, opt.show
@@ -238,15 +219,17 @@ def main(opt):
 
     N = 0
     n = 0
-    for img_name in img_names:
+    for img_name in tqdm(img_names):
         if not img_name.endswith(".jpg"):
             continue
         if img_name.startswith("2"):
             continue
         N += 1
         img = cv2.imread(os.path.join(path, img_name))
-        category, exposure_type = identifyCategory(img)
-        if exposure_type == 1:
+        category, exposure_type = identifyCategory(img, show)
+        if category == 0 and img_name.startswith("0"):
+            n += 1
+        elif category == 1 and img_name.startswith("1"):
             n += 1
     print("准确率:{}".format(n / N))
         
