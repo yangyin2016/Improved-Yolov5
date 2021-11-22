@@ -5,7 +5,7 @@ import numpy as np
 import random
 
 def run_ransac(data, estimate, is_inlier, sample_size, goal_inliers, 
-            max_iterations, stop_at_goal=True, random_seed=None):
+            max_iterations, stop_at_goal=True, random_seed=None, show=False):
     """
     description:对数据进行ransac变换
     param:
@@ -19,25 +19,54 @@ def run_ransac(data, estimate, is_inlier, sample_size, goal_inliers,
     return:
         ?,cos(x), sin(x)
     """
+
     best_ic = 0
     best_model = None
     random.seed(random_seed)
     # random.sample cannot deal with "data" being a numpy array
     data = list(data)
     for i in range(max_iterations):
+        if show:
+            img = np.zeros((500, 500, 3), np.uint8)
+            img.fill(255)
+            inliers = [] 
+            outliers = []
+
         s = random.sample(data, int(sample_size))
         m = estimate(s)
         ic = 0
         for j in range(len(data)):
             if is_inlier(m, data[j]):
+                if show:
+                    inliers.append(data[j])
                 ic += 1
+            else:
+                if show:
+                    outliers.append(data[j])
+
+        if show:
+            print("iterations:{}, model:{}".format(i + 1, ic))
+            k = - m[0] / (m[1] + 1e-9)
+            b = - m[2] / (m[1] + 1e-9)
+            for point in data:
+                x, y = int((point[1] - b) // k), point[1]
+                cv2.circle(img, (x, y), 1, (255, 0, 0), 1)
+            for point in outliers:
+                cv2.circle(img, point, 1, (0, 0, 255), 1)
+            for point in inliers:
+                cv2.circle(img, point, 1, (0, 255, 0), 1)
+
+            plt.figure(figsize=(15, 7))
+            plt.imshow(img)
+            plt.show()
 
         if ic > best_ic:
             best_ic = ic
             best_model = m
             if ic > goal_inliers and stop_at_goal:
                 break
-    #print('took iterations:', i+1, 'best model:', best_model, 'explains:', best_ic)
+    if i == max_iterations:
+        print('took iterations:', i+1, 'best model:', best_model, 'explains:', best_ic)
     return best_model, best_ic
 
 def augment(xys):
@@ -53,16 +82,10 @@ def is_inlier(coeffs, xy, threshold):
     """
     判断是否是inline点
     """
-    return np.abs(coeffs.dot(augment([xy]).T)) < threshold
-
-def line_fitting(data, threshold, sample_size, goal_inliers, 
-                max_iterations,stop_at_goal=False, random_seed=0):
-    """
-    拟合直线
-    """
-    m, b = run_ransac(data, estimate, lambda x, y: is_inlier(x, y, threshold), sample_size, 
-            goal_inliers, max_iterations, stop_at_goal=stop_at_goal, random_seed=random_seed) 
-    return m
+    #return np.abs(coeffs.dot(augment([xy]).T)) < threshold
+    k = - coeffs[0] / (coeffs[1] + 1e-9)
+    b = - coeffs[2] / (coeffs[1] + 1e-9)
+    return (abs(k * xy[0] - xy[1] + b) / np.sqrt(np.square(k) + 1)) < threshold
 
 def randomSampleConsensus(points):
     """
@@ -72,33 +95,22 @@ def randomSampleConsensus(points):
     return:
         直线的参数，格式为k,b
     """
-    sample_size = 30
-    if len(points) < sample_size:
-        return 1e9, 0
-    m = line_fitting(points, threshold=0.01, sample_size=sample_size, 
-                    goal_inliers=100, max_iterations=30, stop_at_goal=True, random_seed=0)
-    k = - m[0] / (m[1] + 1e-8)
-    b = - m[2] / (m[1] + 1e-8)
+    sample_size = 2
+    threshold = 2
+    goal_inliers = int(0.4 * len(points))
+    max_iterations = 30
+
+    m, _ = run_ransac(points, estimate, lambda x, y: is_inlier(x, y, threshold), sample_size=sample_size, 
+            goal_inliers=goal_inliers, max_iterations=max_iterations, stop_at_goal=True, random_seed=None)
+
+    k = - m[0] / (m[1] + 1e-9)
+    b = - m[2] / (m[1] + 1e-9)
 
     return k, b
 
 if __name__ == '__main__':
     import matplotlib
     import matplotlib.pyplot as plt
-
-    n = 100
-    max_iterations = 100
-    goal_inliers = n * 0.3
-
-    # test data
-    xys = np.random.random((n, 2)) * 10
-    xys[:50, 1:] = xys[:50, :1]
-
-    plt.scatter(xys.T[0], xys.T[1])
-
-    # RANSAC
-    m, b = run_ransac(xys, estimate, lambda x, y: is_inlier(x, y, 0.01), goal_inliers, max_iterations, 20)
-    a, b, c = m
-    plt.plot([0, 10], [-c/b, -(c+10*a)/b], color=(0, 1, 0))
-
-    plt.show()
+    import cv2
+    import sys
+    pass
