@@ -276,7 +276,18 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         else:
             c2 = ch[f]
 
-        m_ = nn.Sequential(*[m(*args) for _ in range(n)]) if n > 1 else m(*args)  # module
+        # 改动2，处理Conv和Block模块
+        m_ = None
+        if m is nn.Conv2d:
+            m_ = nn.Sequential(*[m(args[0], args[1], kernel_size=3, stride=args[2], padding=1, bias=False),nn.BatchNorm2d(args[1]), hswish()])
+            c2 = args[1]
+        elif m is Block:
+            nolinear = nn.ReLU(inplace=True) if args[4] == 0 else hswish()
+            semodule = None if args[5] == 0 else eca_layer(args[5])
+            m_ = nn.Sequential(*[m(args[0], args[1], args[2], args[3], nolinear, semodule, args[6])])
+            c2 = args[3]
+        else:
+            m_ = nn.Sequential(*[m(*args) for _ in range(n)]) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace('__main__.', '')  # module type
         np = sum([x.numel() for x in m_.parameters()])  # number params
         m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
