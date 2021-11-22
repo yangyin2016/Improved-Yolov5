@@ -2,6 +2,7 @@
 import scipy.signal as signal
 import matplotlib.pyplot as plt
 import numpy as np
+import cv2
 
 def lowPassFilter(data, ratio=0.2):
     # description:一个简单的低通滤波
@@ -32,15 +33,14 @@ def calNumOfMaximumValue(data, size=10):
     peak_indexes = signal.argrelextrema(data, np.greater, order=size)  
     return peak_indexes[0]
 
-def uShow(data):
-    # 显示图片
-    n = len(data)
-    plt.figure(figsize=(15, 7))         
+def quickShow(img, point_list, figsize=(10, 5), show=True):
+    color = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (0, 255, 255), (255, 0, 255), (255, 255, 0)]
 
-    for i in range(0, n):
-        plt.subplot(1, n, i + 1)
-        if type(data[i]) == np.ndarray:
-            plt.imshow(data[i])
-        elif type(data[i]) == list:
-            plt.plot(data[i])
-    plt.imshow()
+    for i in range(len(point_list)):
+        for point in point_list[i]:
+            cv2.circle(img, point, 1, color[i], 1) 
+    if show:
+        plt.figure(figsize=figsize)
+        plt.imshow(img)
+        plt.show()
+            
