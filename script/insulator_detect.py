@@ -8,10 +8,11 @@ from argparse import ArgumentParser
 from tqdm import tqdm
 
 from ransac import *
-from utils import *
+from utils import lowPassFilter, calNumOfMaximumValue, quickShow, medianFilter
 
-def preProcess(img):
+def preProcess(img, clear=True):
     # description:解析输入的图片路径，给出路径中可用的图像数据
+    # @parm clear:是否清空非最大区域
     # return:[灰度图，二值图]
 
     # 滤波、二值化
@@ -26,14 +27,21 @@ def preProcess(img):
 
     # 寻找最大连通区域,将其余的连通区域清零
     contours, hiterarchy = cv2.findContours(img_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    area = []
-    for i in range(len(contours)):
-        area.append(cv2.contourArea(contours[i]))
+    if clear:
+        area = []
+        for i in range(len(contours)):
+            area.append(cv2.contourArea(contours[i]))
 
-    max_idx = -1 if len(area) == 0 else np.argmax(area) 
-    for i in range(len(contours)):
-        if i != max_idx:
-            cv2.fillPoly(img_binary, [contours[i]], 0)
+        max_idx = -1 if len(area) == 0 else np.argmax(area) 
+        for i in range(len(contours)):
+            if i != max_idx:
+                cv2.fillPoly(img_binary, [contours[i]], 0)
+    # 如果不清零非最大连通区域，则清除过小的连通区域
+    else:
+        thresh = 0.1 * img.shape[0] * img.shape[1]
+        for i in range(len(contours)):
+            if cv2.contourArea(contours[i]) < thresh:
+                cv2.fillPoly(img_binary, [contours[i]], 0)
 
     return img_gray, img_binary
 
@@ -45,33 +53,30 @@ def detectEdge(img_binary):
     right_edge = []
 
     contours, hiterarchy = cv2.findContours(img_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    if len(contours) != 1:
-        return left_edge, right_edge
 
     # 遍历边界点，寻找左右边缘
     total_points = {}
-    lower = contours[0][0][0][1]
-    upper = contours[0][0][0][1]
-    for point in contours[0]:
-        x, y = point[0]
-        lower = min(lower, y)
-        upper = max(upper, y)
-        if y not in total_points.keys():
-            total_points[y] = []
-            total_points[y].append(x) 
-        elif len(total_points[y]) == 1:
-            if total_points[y][0] < x:
+    lower = np.inf
+    upper = -np.inf
+    for contour in contours:
+        for point in contour:
+            x, y = point[0]
+            if x == 0 or y == 0:
+                continue
+            lower = min(lower, y)
+            upper = max(upper, y)
+            if y not in total_points.keys():
+                total_points[y] = [x]
+            elif len(total_points[y]) == 1:
                 total_points[y].append(x)
+                if total_points[y][0] > total_points[y][1]:
+                    total_points[y][0], total_points[y][1] = total_points[y][1], total_points[y][0]
             else:
-                total_points[y].append(total_points[y][0])
-                total_points[y][0] = x
-        else:
-            if x < total_points[y][0]:
-                total_points[y][0] = x
-            elif x > total_points[y][1]:
-                total_points[y][1] = x
-        
-    # 将左右边缘转换成列表的形式
+                if x < total_points[y][0]:
+                    total_points[y][0] = x
+                elif x > total_points[y][1]:
+                    total_points[y][1] = x
+
     for row in range(lower, upper + 1):
         if (row not in total_points.keys()) or (len(total_points[row]) != 2):
             continue
@@ -87,7 +92,45 @@ def detectEdge(img_binary):
     for i in range(n):
         mid_line_detected.append([(left_edge[i][0] + right_edge[i][0]) // 2, \
                 (left_edge[i][1] + right_edge[i][1]) // 2])
+
     return left_edge, right_edge, mid_line_detected
+
+def detectEdgeByCanny(img, left_limit, right_limit, thresh=3):
+    # 使用canny检测寻找边缘，left_limit和right_limit是两侧边缘直线的直线参数k和b
+    k_l, b_l = left_limit
+    k_r, b_r = right_limit
+    img = cv2.GaussianBlur(img, (5, 5), 0)
+    img_canny = cv2.Canny(img, 10, 50)
+    left_edge = []
+    right_edge = []
+    mid_line = []
+
+    h, w, _ = img.shape
+    for row in range(h):
+        for col1 in range(w):
+            if img_canny[row, col1] == 255:
+                if (row - b_l) // k_l > col1 + thresh:
+                    continue
+                left_edge.append([col1, row])
+                break
+        for col2 in reversed(range(w)):
+            if img_canny[row, col2] == 255:
+                if (row - b_r) // k_r < col2 - thresh:
+                    continue
+                right_edge.append([col2, row])
+                break
+        mid_line.append([int((col1 + col2) // 2), row]) 
+
+    return left_edge, right_edge, mid_line
+    # 滤波
+    left_edge = np.array(left_edge)
+    left_edge[:, 0] = medianFilter(left_edge[:, 0])
+    right_edge = np.array(right_edge)
+    right_edge[:, 0] = medianFilter(right_edge[:, 0])
+    mid_line = np.array(mid_line)
+    mid_line[:, 0] = medianFilter(mid_line[:, 0])
+
+    return left_edge.tolist(), right_edge.tofile(), mid_line.tolist()
  
 def fitLine(line):
     # 拟合线段
@@ -156,22 +199,27 @@ def identifyCategory(img, show=False):
     insulator_type = -1
     exposure_type = -1
 
-    # 预处理
+    # 预处理计算拟合边缘
     img_gray, img_binary = preProcess(img)
-    left_edge, right_edge, mid_line_detected = detectEdge(img_binary) 
-    k_m, b_m, mid_line_fitted, variance_m = fitLine(mid_line_detected)
-    pieces, gray_curve = calNumOfPieces(img_gray, left_edge, right_edge, mid_line_detected) 
-    if pieces < 9:
-        return -1, -1
-    
-    # 拟合边缘
+    left_edge, right_edge, mid_line_detected = detectEdge(img_binary)
+    k_l, b_l, _, _= fitLine(left_edge)
+    k_r, b_r, _, _= fitLine(right_edge)
+
+    # 使用基于灰度拟合的边缘，来再次使用canny搜索边缘
+    left_edge, right_edge, mid_line_detected = detectEdgeByCanny(img, [k_l, b_l], [k_r, b_r])
     k_l, b_l, left_edge_fitted, variance_l = fitLine(left_edge)
     k_r, b_r, right_edge_fitted, variance_r = fitLine(right_edge)
-    angle_l = np.degrees(np.arctan(k_l))
-    angle_r = np.degrees(np.arctan(k_r))
+
+    # 计算绝缘子串片数
+    pieces, gray_curve = calNumOfPieces(img_gray, left_edge, right_edge, mid_line_detected) 
+    k_m, b_m, mid_line_fitted, variance_m = fitLine(mid_line_detected)
+    if pieces < 9:
+        return -1, -1
 
     # 1. 绝缘子串分类
     # 计算左右边角度差
+    angle_l = np.degrees(np.arctan(k_l))
+    angle_r = np.degrees(np.arctan(k_r))
     angle_threshold = 5
     angle_diff = 0
     if angle_l * angle_r > 0:
@@ -209,9 +257,32 @@ def identifyCategory(img, show=False):
 
     # 3. plot
     if show:
+        output = ""
+        if insulator_type == 0:
+            output += "变盘径,"
+        elif insulator_type == 1:
+            output += "单盘径,"
+        elif insulator_type == 2:
+            output += "双盘径,"
+        else:
+            output += "未知,"
+        if exposure_type == -1:
+            output += "无法恢复"
+        elif exposure_type == 0:
+            output += "正常"
+        elif exposure_type == 1:
+            output += "可以恢复"
+        print(output)
         quickShow(img, [left_edge, left_edge_fitted, right_edge, right_edge_fitted], show=show)
 
     return insulator_type, exposure_type
+
+def showCanny(img):
+    # 显示canny检测的效果
+    left_edge, right_edge, mid_line_detected = detectEdgeByCanny(img)
+
+    quickShow(img, [left_edge, right_edge, mid_line_detected], figsize=(15, 7))
+
 
 def main(opt):
     path, output, show = opt.path, opt.output, opt.show
@@ -224,6 +295,7 @@ def main(opt):
             continue
         if img_name.startswith("2"):
             continue
+        img = cv2.imread(os.path.join(path, img_name))
         N += 1
         img = cv2.imread(os.path.join(path, img_name))
         category, exposure_type = identifyCategory(img, show)
@@ -235,7 +307,7 @@ def main(opt):
         
 if __name__ == "__main__":
     parser = ArgumentParser(description="检测绝缘子串")
-    parser.add_argument("--path", type=str, default="test_data/normal", help="图片路径")
+    parser.add_argument("--path", type=str, default="test_data/exposured", help="图片路径")
     parser.add_argument("--output", type=str, default="output", help="图片保存路径")
     parser.add_argument("--show", action='store_true', help="显示检测效果")
 
