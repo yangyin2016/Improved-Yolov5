@@ -5,9 +5,14 @@ import numpy as np
 import os
 import argparse
 from data_augment import DataAugment
-from insulator_detect import split
+from insulator_detect import preProcess
 from tqdm import tqdm
 
+def split(img):
+    # description:将绝缘子串从图像中分割出来
+    img_gray, img_binary = preProcess(img)
+    img[np.where(img_binary == 0)] = 0
+    return img
 
 class DataExpand:
     def __init__(self, bbox_path, bg_path, result_path):

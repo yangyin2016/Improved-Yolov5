@@ -7,190 +7,129 @@ from timeit import default_timer as timer
 from argparse import ArgumentParser
 from tqdm import tqdm
 
-from ransac import *
-from utils import lowPassFilter, calNumOfMaximumValue, quickShow, medianFilter
+from insulator import InsulatorItem
 
-def preProcess(img, clear=True):
-    # description:解析输入的图片路径，给出路径中可用的图像数据
-    # @parm clear:是否清空非最大区域
-    # return:[灰度图，二值图]
 
-    # 滤波、二值化
-    img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    #img_gray = cv2.add(img_gray, -30)
-    thresh, img_binary = cv2.threshold(img_gray, 0, 255, cv2.THRESH_OTSU | cv2.THRESH_BINARY_INV)
-
-    # 形态学操作
-    kernel = np.ones((5, 5), np.uint8)
-    img_binary = cv2.dilate(img_binary, kernel, iterations=2)
-    img_binary = cv2.erode(img_binary, kernel, iterations=2)
-
-    # 寻找最大连通区域,将其余的连通区域清零
-    contours, hiterarchy = cv2.findContours(img_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    if clear:
-        area = []
-        for i in range(len(contours)):
-            area.append(cv2.contourArea(contours[i]))
-
-        max_idx = -1 if len(area) == 0 else np.argmax(area) 
-        for i in range(len(contours)):
-            if i != max_idx:
-                cv2.fillPoly(img_binary, [contours[i]], 0)
-    # 如果不清零非最大连通区域，则清除过小的连通区域
-    else:
-        thresh = 0.1 * img.shape[0] * img.shape[1]
-        for i in range(len(contours)):
-            if cv2.contourArea(contours[i]) < thresh:
-                cv2.fillPoly(img_binary, [contours[i]], 0)
-
-    return img_gray, img_binary
-
-def detectEdge(img_binary):
-    # description:分割绝缘子串，提取左右边缘坐标，计算中线坐标
-    # return:[左侧边缘坐标，右侧边缘坐标，中线坐标]
-
-    left_edge = []
-    right_edge = []
-
-    contours, hiterarchy = cv2.findContours(img_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-
-    # 遍历边界点，寻找左右边缘
-    total_points = {}
-    lower = np.inf
-    upper = -np.inf
-    for contour in contours:
-        for point in contour:
-            x, y = point[0]
-            if x == 0 or y == 0:
-                continue
-            lower = min(lower, y)
-            upper = max(upper, y)
-            if y not in total_points.keys():
-                total_points[y] = [x]
-            elif len(total_points[y]) == 1:
-                total_points[y].append(x)
-                if total_points[y][0] > total_points[y][1]:
-                    total_points[y][0], total_points[y][1] = total_points[y][1], total_points[y][0]
-            else:
-                if x < total_points[y][0]:
-                    total_points[y][0] = x
-                elif x > total_points[y][1]:
-                    total_points[y][1] = x
-
-    for row in range(lower, upper + 1):
-        if (row not in total_points.keys()) or (len(total_points[row]) != 2):
-            continue
-        left_edge.append([total_points[row][0], row])
-        right_edge.append([total_points[row][1], row])
+class InsulatorDetector:
+    # 绝缘子串检测类
+    # 使用方法:
+    #   detector = InsulatorDetector()
+    #   insulator_contour, insulator_points = detector.detect(img, bbox)
     
-    # 计算中线
-    if len(left_edge) != len(right_edge):
-        return left_edge, right_edge, []
-    n = len(left_edge)
-    mid_line_detected = []
+    def __init__(self):
+        self.input_img = None
+        self.insulators = []
 
-    for i in range(n):
-        mid_line_detected.append([(left_edge[i][0] + right_edge[i][0]) // 2, \
-                (left_edge[i][1] + right_edge[i][1]) // 2])
+    def __updateParam(self, img, bbox):
+        # 更新检测需要的基本数据
+        # @param img 输入的图片
+        # @param bbox yolo格式的label
 
-    return left_edge, right_edge, mid_line_detected
+        self.input_img = img.copy()
+        self.insulators = []
+        if len(bbox.shape) == 1:
+            bbox = np.expand_dims(bbox, axis=0)
+        # 解析self.bbox内容，将对应的bbox中的绝缘子串切分出来保存在InsulatorItem中
+        height, width, _ = self.input_img.shape
+        for bx in bbox:
+            category, x, y, w, h = bx
+            x1, y1, x2, y2 = int(width * (x - w / 2)), int(height * (y - h / 2)), \
+                        int(width * (x + w / 2)), int(height * (y + h / 2))
+            self.insulators.append(InsulatorItem(img[y1 : y2, x1 : x2].copy(), [category, x1, y1, x2, y2]))
+             
 
-def detectEdgeByCanny(img, left_limit, right_limit, thresh=3):
-    # 使用canny检测寻找边缘，left_limit和right_limit是两侧边缘直线的直线参数k和b
-    k_l, b_l = left_limit
-    k_r, b_r = right_limit
-    img = cv2.GaussianBlur(img, (5, 5), 0)
-    img_canny = cv2.Canny(img, 10, 50)
-    left_edge = []
-    right_edge = []
-    mid_line = []
+    def __identifyCategory(self):
+        # 识别绝缘子串的种类
 
-    h, w, _ = img.shape
-    for row in range(h):
-        for col1 in range(w):
-            if img_canny[row, col1] == 255:
-                if (row - b_l) // k_l > col1 + thresh:
-                    continue
-                left_edge.append([col1, row])
-                break
-        for col2 in reversed(range(w)):
-            if img_canny[row, col2] == 255:
-                if (row - b_r) // k_r < col2 - thresh:
-                    continue
-                right_edge.append([col2, row])
-                break
-        mid_line.append([int((col1 + col2) // 2), row]) 
+        # 提取中线
+        mid_line_param = []
+        for i, insulator in enumerate(self.insulators):
+            k, b = insulator.reflectKbToGlobal()
+            angle, offset = np.degrees(np.arctan(k)), b
+            angle = angle if angle > 0 else 180 + angle
 
-    return left_edge, right_edge, mid_line
-    # 滤波
-    left_edge = np.array(left_edge)
-    left_edge[:, 0] = medianFilter(left_edge[:, 0])
-    right_edge = np.array(right_edge)
-    right_edge[:, 0] = medianFilter(right_edge[:, 0])
-    mid_line = np.array(mid_line)
-    mid_line[:, 0] = medianFilter(mid_line[:, 0])
+            mid_line_param.append([angle, offset, i])
+        mid_line_param = sorted(mid_line_param)
+        
+        # 根据共线寻找两段式（这段代码效率很低）
+        angle_thresh_1 = 4
+        offset_thresh = 100
+        for i in range(0, len(mid_line_param)):
+            angle_i, offset_i, index_i = mid_line_param[i]
+            if index_i == -1:
+                continue
+            for j in range(i + 1, len(mid_line_param)):
+                angle_j, offset_j, index_j = mid_line_param[j]
+                if abs(angle_i - angle_j) < angle_thresh_1 and abs(offset_i - offset_j) < offset_thresh:
+                    self.insulators[index_i].insulator_type = 2 # 设置为两段
+                    self.insulators[index_j].insulator_type = 2 
+                    mid_line_param[i][2], mid_line_param[j][2] = -1, -1
+          
+        # 对于剩下的绝缘子串，继续分类
+        angle_thresh_2 = 5
+        for index, insulator in enumerate(self.insulators):
+            if insulator.insulator_type != -1:
+                continue
+            angle_l = np.degrees(np.arctan(insulator.binary_left_edge.k))
+            angle_r = np.degrees(np.arctan(insulator.binary_right_edge.k))
+            angle_l = angle_l if angle_l > 0 else 180 + angle_l
+            angle_r = angle_r if angle_r > 0 else 180 + angle_r
+            if abs(angle_l - angle_r) < angle_thresh_2:
+                self.insulators[index].insulator_type = 1
+            else:
+                self.insulators[index].insulator_type = 0
 
-    return left_edge.tolist(), right_edge.tofile(), mid_line.tolist()
- 
-def fitLine(line):
-    # 拟合线段
-    # 返回：直线参数，拟合后的线段坐标，以及拟合线段和原线段的平方差
+    
+    def __identifyExposure(self):
+        pass
 
-    n = len(line)
-    line_fitted = []
-    variance = 0.0
-    k, b = randomSampleConsensus(line[int(0.1 * n) : int(0.9 * n)])
+    def __restore(self):
+        pass
 
-    for i in range(n):
-        x, y = int((line[i][1] - b) // k), line[i][1]
-        line_fitted.append([x, y])
-        if i > 0.1 * n and i < 0.9 * n:
-            variance += np.square((line[i][0] - x))
-    variance /= (0.8 * n)
+    def test(self, path):
+        # 测试绝缘子串分类和曝光分类的正确率 
 
-    return k, b, line_fitted, variance
+        img_names = os.listdir(path)
+        insulator_precision = 0
+        exposure_precision = 0
+        insulator_number = 0
 
-def split(img):
-    # description:将绝缘子串从图像中分割出来
+        for img_name in tqdm(img_names):
+            # 读取图片和label
+            if not img_name.endswith(("jpg", "png")):
+                continue
+            prefix, suffix = img_name.split('.')
+            label_name = prefix + ".txt"
 
-    img_gray, img_binary = preProcess(img)
-    img[np.where(img_binary == 0)] = 0
-    return img
+            img = cv2.imread(os.path.join(path, img_name))
+            label = np.loadtxt(os.path.join(path, label_name))
 
-def calDeviation(width, mid_line_detected, mid_line_fitted):
-    # description:计算理论中线与实际中线的偏离程度
-    if len(mid_line_detected) != len(mid_line_fitted):
-        return 1
+            # 运行检测器
+            self.__updateParam(img, label)
+            self.__identifyCategory() 
+            self.__identifyExposure() 
 
-    k = 100
-    n = len(mid_line_detected)
-    variance = 0
-    for i in range(n):
-        variance += np.square(mid_line_fitted[i][0] - mid_line_detected[i][0]) 
-    variance = k * mse / n / np.square(width)
+            # 显示结果
+            for insulator in self.insulators:
+                insulator_number += 1
+                if insulator.insulator_type == insulator.bbox[0]:
+                    insulator_precision += 1
 
-    return variance
+        insulator_precision /= insulator_number
+        print("共测试{}个目标，绝缘子串分类准确率:{}".format(insulator_number, insulator_precision))
 
-def calNumOfPieces(img_gray, left_edge, right_edge, mid_line):
-    # description:根据绝缘子串的灰度图和其左右边缘计算其绝缘子片的数量
-    # 返回绝缘子串的片数
+    def detect(self, img, bbox):
+        # 检测图片中的绝缘子串的详细轮廓
+        # @param img 输入的彩色绝缘子串图像
+        # @param bbox 神经网络的输出，或者数据集中的label，格式为yolo格式
+        # @param is_classified 是否已经分类完毕
+        # return检测到的绝缘子串精确轮廓，以及包含在其中的点的坐标
+        self.__updateParam(img, bbox)
 
-    # 图像锐化
-    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], np.float32)
-    img_gray = cv2.filter2D(img_gray, -1, kernel)
+        return [], []
+    
 
-    # 计算灰度曲线并滤波
-    mid_line= np.array(mid_line)
-    gray_value = img_gray[mid_line[:, 1], mid_line[:, 0]]   # 中线上的灰度值
-
-    # 计算极值点数量
-    gray_value_filted = lowPassFilter(gray_value, ratio=0.4)
-    peak_index = calNumOfMaximumValue(gray_value, size=10)
-    num = peak_index.shape[0]
-
-    return num, gray_value_filted
-
-def identifyCategory(img, show=False):
+"""def identifyCategory(img, show=False):
     # 分析绝缘子和过曝特征
     # return:[insulator_type, exposure_type]
     #   insulator_type:-1表示缺失，0表示变盘径，1表示固定盘径，2表示双段
@@ -200,8 +139,8 @@ def identifyCategory(img, show=False):
     exposure_type = -1
 
     # 预处理计算拟合边缘
-    img_gray, img_binary = preProcess(img)
-    left_edge, right_edge, mid_line_detected = detectEdge(img_binary)
+    gray_img, binary_img = preProcess(img)
+    left_edge, right_edge, mid_line_detected = detectEdge(binary_img)
     k_l, b_l, _, _= fitLine(left_edge)
     k_r, b_r, _, _= fitLine(right_edge)
 
@@ -211,7 +150,7 @@ def identifyCategory(img, show=False):
     k_r, b_r, right_edge_fitted, variance_r = fitLine(right_edge)
 
     # 计算绝缘子串片数
-    pieces, gray_curve = calNumOfPieces(img_gray, left_edge, right_edge, mid_line_detected) 
+    pieces, gray_curve = calNumOfPieces(gray_img, left_edge, right_edge, mid_line_detected) 
     k_m, b_m, mid_line_fitted, variance_m = fitLine(mid_line_detected)
     if pieces < 9:
         return -1, -1
@@ -220,14 +159,14 @@ def identifyCategory(img, show=False):
     # 计算左右边角度差
     angle_l = np.degrees(np.arctan(k_l))
     angle_r = np.degrees(np.arctan(k_r))
-    angle_threshold = 5
+    angle_thresh_1old = 5
     angle_diff = 0
     if angle_l * angle_r > 0:
         angle_diff = abs(angle_l - angle_r)
     else:
         angle_diff = 180 - abs(angle_l) - abs(angle_r)
     # 分类
-    if angle_diff < angle_threshold:
+    if angle_diff < angle_thresh_1old:
         insulator_type = 1
     else:
         insulator_type = 0
@@ -277,37 +216,47 @@ def identifyCategory(img, show=False):
 
     return insulator_type, exposure_type
 
-def showCanny(img):
-    # 显示canny检测的效果
-    left_edge, right_edge, mid_line_detected = detectEdgeByCanny(img)
-
-    quickShow(img, [left_edge, right_edge, mid_line_detected], figsize=(15, 7))
-
+"""
 
 def main(opt):
     path, output, show = opt.path, opt.output, opt.show
     img_names = os.listdir(path)
 
-    N = 0
-    n = 0
+    detector = InsulatorDetector()
+    detector.test(path)
+
+    """
     for img_name in tqdm(img_names):
-        if not img_name.endswith(".jpg"):
+        # 读取图片和label
+        if not img_name.endswith(("jpg", "png")):
             continue
-        if img_name.startswith("2"):
-            continue
+        prefix, suffix = img_name.split('.')
+        label_name = prefix + ".txt"
+
         img = cv2.imread(os.path.join(path, img_name))
-        N += 1
-        img = cv2.imread(os.path.join(path, img_name))
-        category, exposure_type = identifyCategory(img, show)
-        if category == 0 and img_name.startswith("0"):
-            n += 1
-        elif category == 1 and img_name.startswith("1"):
-            n += 1
-    print("准确率:{}".format(n / N))
+        label = np.loadtxt(os.path.join(path, label_name))
+        print("读取图片{}，读取label{}".format(img_name, label_name))
+
+        detector.test(img, label)
+
+        # 检测
+        insulator_contour, insulator_points = detector.detect(img, label)
+
+        # 显示结果
+        show_img = img.copy()
+        for points in insulator_points:
+            for point in points:
+                cv2.circle(show_img, point, 1, (0, 0, 255), 1)
+        plt.subplot(1, 2, 1)
+        plt.imshow(img)
+        plt.subplot(1, 2, 2)
+        plt.imshow(show_img)
+        """
+
         
 if __name__ == "__main__":
     parser = ArgumentParser(description="检测绝缘子串")
-    parser.add_argument("--path", type=str, default="test_data/exposured", help="图片路径")
+    parser.add_argument("--path", type=str, default="/home/fenghan/dataset/detect_dataset/normal", help="图片路径")
     parser.add_argument("--output", type=str, default="output", help="图片保存路径")
     parser.add_argument("--show", action='store_true', help="显示检测效果")
 
