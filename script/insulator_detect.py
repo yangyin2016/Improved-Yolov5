@@ -86,38 +86,6 @@ class InsulatorDetector:
     def __restore(self):
         pass
 
-    def test(self, path):
-        # 测试绝缘子串分类和曝光分类的正确率 
-
-        img_names = os.listdir(path)
-        insulator_precision = 0
-        exposure_precision = 0
-        insulator_number = 0
-
-        for img_name in tqdm(img_names):
-            # 读取图片和label
-            if not img_name.endswith(("jpg", "png")):
-                continue
-            prefix, suffix = img_name.split('.')
-            label_name = prefix + ".txt"
-
-            img = cv2.imread(os.path.join(path, img_name))
-            label = np.loadtxt(os.path.join(path, label_name))
-
-            # 运行检测器
-            self.__updateParam(img, label)
-            self.__identifyCategory() 
-            self.__identifyExposure() 
-
-            # 显示结果
-            for insulator in self.insulators:
-                insulator_number += 1
-                if insulator.insulator_type == insulator.bbox[0]:
-                    insulator_precision += 1
-
-        insulator_precision /= insulator_number
-        print("共测试{}个目标，绝缘子串分类准确率:{}".format(insulator_number, insulator_precision))
-
     def detect(self, img, bbox):
         # 检测图片中的绝缘子串的详细轮廓
         # @param img 输入的彩色绝缘子串图像
@@ -125,6 +93,8 @@ class InsulatorDetector:
         # @param is_classified 是否已经分类完毕
         # return检测到的绝缘子串精确轮廓，以及包含在其中的点的坐标
         self.__updateParam(img, bbox)
+        self.__identifyCategory()
+        self.__identifyExposure()
 
         return [], []
     
@@ -217,13 +187,57 @@ class InsulatorDetector:
     return insulator_type, exposure_type
 
 """
+def test(path):
+    # 测试绝缘子串分类和曝光分类的正确率 
+
+    img_names = [] 
+    for name in os.listdir(path):
+        if name.endswith(("jpg", "png")):
+            img_names.append(name)
+
+    insulator_precision = 0
+    exposure_precision = 0
+    insulator_number = 0
+
+    detector = InsulatorDetector()
+    for img_name in tqdm(img_names):
+        # 读取图片和label
+        if not img_name.endswith(("jpg", "png")):
+            continue
+        prefix, suffix = img_name.split('.')
+        label_name = prefix + ".txt"
+
+        img = cv2.imread(os.path.join(path, img_name))
+        label = np.loadtxt(os.path.join(path, label_name))
+
+        # 运行检测器
+        detector.detect(img, label)
+
+        # 显示结果
+        for insulator in detector.insulators:
+            insulator_number += 1
+            if insulator.insulator_type == insulator.bbox[0]:
+                insulator_precision += 1
+            else:
+                print("分类错误！类别{}被分为{}".format(insulator.bbox[0], insulator.insulator_type))
+                plt.figure(figsize=(15, 8))
+                plt.subplot(1,2 ,1)
+                plt.imshow(insulator.img.color_img)
+                plt.subplot(1, 2, 2)
+                plt.imshow(insulator.img.binary_img)
+                plt.show()
+
+
+    insulator_precision /= insulator_number
+    print("共测试{}个目标，绝缘子串分类准确率:{}".format(insulator_number, insulator_precision))
+
+
 
 def main(opt):
     path, output, show = opt.path, opt.output, opt.show
     img_names = os.listdir(path)
 
-    detector = InsulatorDetector()
-    detector.test(path)
+    test(path)
 
     """
     for img_name in tqdm(img_names):
