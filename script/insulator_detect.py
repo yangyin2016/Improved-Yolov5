@@ -45,22 +45,33 @@ class InsulatorDetector:
         mid_line_param = []
         for i, insulator in enumerate(self.insulators):
             k, b = insulator.reflectKbToGlobal()
-            angle, offset = np.degrees(np.arctan(k)), b
-            angle = angle if angle > 0 else 180 + angle
+            mid_line_param.append([k, b, i])
+            # test
+            p1 = (int((100 - b) // k), 100)
+            p2 = (int((1400 - b) // k), 1400)
+            cv2.line(self.input_img, p1, p2, (255, 0, 0), 2)
+            plt.figure(figsize=(15, 8))
+            plt.imshow(self.input_img)
+            plt.show()
 
-            mid_line_param.append([angle, offset, i])
         mid_line_param = sorted(mid_line_param)
         
         # 根据共线寻找两段式（这段代码效率很低）
         angle_thresh_1 = 4
-        offset_thresh = 100
+        b_thresh = 1000
         for i in range(0, len(mid_line_param)):
-            angle_i, offset_i, index_i = mid_line_param[i]
+            k_i, b_i, index_i = mid_line_param[i]
+            angle_i = np.degrees(np.arctan(k_i))
+            angle_i = angle_i if angle_i > 0 else 180 + angle_i
             if index_i == -1:
                 continue
+
             for j in range(i + 1, len(mid_line_param)):
-                angle_j, offset_j, index_j = mid_line_param[j]
-                if abs(angle_i - angle_j) < angle_thresh_1 and abs(offset_i - offset_j) < offset_thresh:
+                k_j, b_j, index_j = mid_line_param[j]
+                angle_j = np.degrees(np.arctan(k_j))
+                angle_j = angle_j if angle_j > 0 else 180 + angle_j
+                    
+                if abs(angle_i - angle_j) < angle_thresh_1 and abs(b_i - b_j) / max(k_i, k_j) < b_thresh:
                     self.insulators[index_i].insulator_type = 2 # 设置为两段
                     self.insulators[index_j].insulator_type = 2 
                     mid_line_param[i][2], mid_line_param[j][2] = -1, -1

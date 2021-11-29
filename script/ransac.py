@@ -44,21 +44,10 @@ def run_ransac(data, estimate, is_inlier, sample_size, goal_inliers,
                 if show:
                     outliers.append(data[j])
 
-        if show:
-            print("iterations:{}, model:{}".format(i + 1, ic))
-            k = - m[0] / (m[1] + 1e-9)
-            b = - m[2] / (m[1] + 1e-9)
-            for point in data:
-                x, y = int((point[1] - b) // k), point[1]
-                cv2.circle(img, (x, y), 1, (255, 0, 0), 1)
-            for point in outliers:
-                cv2.circle(img, point, 1, (0, 0, 255), 1)
-            for point in inliers:
-                cv2.circle(img, point, 1, (0, 255, 0), 1)
-
-            plt.figure(figsize=(15, 7))
-            plt.imshow(img)
-            plt.show()
+        if True:
+            k = - m[0] / ((m[1] + 1e-6) if m[1] > 0 else (m[1] - 1e-6))
+            b = - m[2] / ((m[1] + 1e-6) if m[1] > 0 else (m[1] - 1e-6))
+            print("iterations:{}, model:{}，m[0]:{},m[1]:{}, k:{},b:{}".format(i + 1, ic, m[0], m[1], k, b))
 
         if ic > best_ic:
             best_ic = ic
@@ -102,9 +91,9 @@ def randomSampleConsensus(points):
 
     m, _ = run_ransac(points, estimate, lambda x, y: is_inlier(x, y, threshold), sample_size=sample_size, 
             goal_inliers=goal_inliers, max_iterations=max_iterations, stop_at_goal=True, random_seed=None)
-
-    k = - m[0] / (m[1] + 1e-9)
-    b = - m[2] / (m[1] + 1e-9)
+    print(m)
+    k = - m[0] / (m[1] + 1e-6)
+    b = - m[2] / (m[1] + 1e-6)
 
     return k, b
 

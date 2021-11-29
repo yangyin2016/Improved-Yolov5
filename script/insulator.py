@@ -96,6 +96,8 @@ class InsulatorItem:
         # 提取灰度特征
         self.gray_curve_peak_index, self.gray_curve = self.__detectGrayCurve()
 
+        # 显示结果
+
     def __detectEdgeByColor(self):
         left_edge = []
         right_edge = []
