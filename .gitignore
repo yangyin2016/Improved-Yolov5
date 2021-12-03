@@ -6,3 +6,4 @@ runs/*
 *.jpg
 *.png
 *.txt
+*.ipynb_checkpoints
