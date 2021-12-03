@@ -5,4 +5,8 @@ runs/*
 *vscode*
 *.jpg
 *.png
-*.txt
+*detect_dataset/*
+*.ipynb_checkpoints
+*/build/*
+*.workspace.vim
+*.ycm_extra_conf.py
