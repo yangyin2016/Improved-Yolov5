@@ -31,11 +31,17 @@ find_package(OpenCV)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
 cuda_add_executable(yolov5 calibrator.cpp yolov5.cpp preprocess.cu)
+cuda_add_executable(customize calibrator.cpp customize.cpp preprocess.cu)
 
 target_link_libraries(yolov5 nvinfer)
 target_link_libraries(yolov5 cudart)
 target_link_libraries(yolov5 myplugins)
 target_link_libraries(yolov5 ${OpenCV_LIBS})
+
+target_link_libraries(customize nvinfer)
+target_link_libraries(customize cudart)
+target_link_libraries(customize myplugins)
+target_link_libraries(customize ${OpenCV_LIBS})
 
 if(UNIX)
 add_definitions(-O2 -pthread)
