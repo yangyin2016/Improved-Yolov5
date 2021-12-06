@@ -585,15 +585,22 @@ class ECAC3(nn.Module):
 import torch.nn.functional as F
 from torch.nn import init
 
+def relu6(x, inplace):
+        #return F.relu6(x,inplace)
+        out = 6.0 - nn.ReLU(inplace)(6.0 - x)
+        return out
+
 class hswish(nn.Module):
     def forward(self, x):
-        out = x * F.relu6(x + 3, inplace=True) / 6
+        #out = x * F.relu6(x + 3, inplace=True) / 6
+        out = x * relu6(x + 3, inplace=True) / 6
         return out
 
 
 class hsigmoid(nn.Module):
     def forward(self, x):
-        out = F.relu6(x + 3, inplace=True) / 6
+        #out = F.relu6(x + 3, inplace=True) / 6
+        out = relu6(x + 3, inplace=True) / 6
         return out
 
 
