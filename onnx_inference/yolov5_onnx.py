@@ -16,15 +16,15 @@ from argparse import ArgumentParser
 class YOLOV5_ONNX(object):
     def __init__(self,onnx_path, shape=(640, 640), class_num=1, batch_size=1):
         '''初始化onnx'''
-        self.onnx_session = onnxruntime.InferenceSession(onnx_path)
+        device = onnxruntime.get_device()
+        self.onnx_session = onnxruntime.InferenceSession(onnx_path, providers=['CUDAExecutionProvider'])
         self.shape = shape
         self.class_num = class_num
         self.batch_size = 1
 
         self.input_name = self.get_input_name()
         self.output_name = self.get_output_name()
-        print("input name:{}".format(self.input_name))
-        print("output name:{}".format(self.output_name))
+        print("device:{}, input name:{}, output name:{}".format(device, self.input_name, self.output_name))
 
         anchor_list= [[10,13, 16,30, 33,23],[30,61, 62,45, 59,119], [116,90, 156,198, 373,326]]
         self.anchor = np.array(anchor_list).astype(np.float32).reshape(3,-1,2)
@@ -221,8 +221,6 @@ class YOLOV5_ONNX(object):
 
         results = torch.cat(z, 1)
         results = non_max_suppression(results, conf_thres=0.25, iou_thres=0.45)
-        #results = self.nms(results, conf_thres)
-        print(results)
         cast=time.time()-start
         print("cast time:{}".format(cast))
 
