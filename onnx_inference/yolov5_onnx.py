@@ -1,9 +1,12 @@
 # coding=utf-8
 import sys
+
+from numpy.lib.utils import source
 sys.path.append('..')
 from utils.general import non_max_suppression
 
 import cv2
+import os
 import numpy as np
 from numpy.core.numeric import outer
 import onnxruntime
@@ -12,6 +15,7 @@ import torchvision
 import time
 import random
 from argparse import ArgumentParser
+from tqdm import tqdm
 
 class YOLOV5_ONNX(object):
     def __init__(self,onnx_path, shape=(640, 640), class_num=1, batch_size=1):
@@ -183,39 +187,85 @@ class YOLOV5_ONNX(object):
         coords[:, :4] /= gain  # 将box坐标对应到原始图像上
         self.clip_coords(coords, img0_shape)  # 边界检查
         return coords
-
-    def sigmoid(self,x):
-        return 1 / (1 + np.exp(-x))
-
-    def forward(self,img_path, conf_thres=0.25):
-        '''执行前向操作预测输出'''
-        # 读取图片
-        src_img = cv2.imread(img_path)
-        src_size = src_img.shape[:2]
-
-        # 预处理、归一化、维度扩张
-        img, ratio, (dw, dh) = self.letterbox(src_img, self.shape, stride=32)
-        img = self.img2input(img)
-
-        # 前向推理
+    
+    def inference(self, img, conf_thres=0.25):
+        """
+        对输入的img进行推理，输出目标的bbox坐标信息
+        """
         start = time.time()
 
         input_feed = self.get_input_feed(img)
         preds = self.onnx_session.run(output_names=self.output_name,input_feed=input_feed)
         results = self.output2bbox(preds)
-        results = non_max_suppression(results, conf_thres=0.25, iou_thres=0.45)
+        results = non_max_suppression(results, conf_thres=conf_thres, iou_thres=0.45)
 
         end = time.time()
         print("cost time:{}".format(end - start))
 
-        #映射到原始图像
-        img_shape=img.shape[2:]
-        for det in results:  # detections per image
+        return results
+
+    def test(self, img_path, label_path, conf_thres=0.25):
+        """
+        测试不同尺度的检测精度，并绘制点阵图
+        """
+        print("正在处理label")
+        source_list = []
+        img_list, label_list = os.listdir(img_path), os.listdir(label_path)
+        for img_name in tqdm(img_list):
+            prefix, suffix = img_name.split('.')
+            label_name = prefix + '.txt'
+            if label_name in label_list:
+                source_list.append((os.path.join(img_path, img_name), os.path.join(label_path, label_name)))
+        
+        print("正在评估指标")
+        for (img_path, label_path) in tqdm(source_list):
+            src_img = cv2.imread(img_path)
+            src_size = src_img.shape[:2]
+
+            # 预处理、归一化、维度扩张
+            img, ratio, (dw, dh) = self.letterbox(src_img, self.shape, stride=32)
+            img = self.img2input(img)
+
+            # 前向推理
+            results = self.inference(img, conf_thres)
+
+
+    def detect(self, source_path, show=False, conf_thres=0.25):
+        '''
+        检测对应路径的图像 
+        '''
+        # 判断source_path的类型：图片坐标、图片目录或者视频
+        source_list = []
+        if os.path.isdir(source_path):
+            for name in os.listdir(source_path):
+                if name.endswith(('jpg', 'png')):
+                    source_list.append(os.path.join(source_path, name)) 
+        elif source_path.endswith(('jpg', 'png')):
+            source_list.append(source_path)
+        elif source_path.endswith(('mp4', 'avi')):
+            print("暂时不支持视频格式:{}".format(source_path))
+        else:
+            print("无法识别的格式:{}".format(source_path))
+
+        # 读取图片
+        for path in source_list:
+            src_img = cv2.imread(path)
+            src_size = src_img.shape[:2]
+
+            # 预处理、归一化、维度扩张
+            img, ratio, (dw, dh) = self.letterbox(src_img, self.shape, stride=32)
+            img = self.img2input(img)
+
+            # 前向推理
+            results = self.inference(img, conf_thres)
+
+            #映射到原始图像
+            img_shape=img.shape[2:]
+            for det in results:  # detections per image
+                if det is not None and len(det):
+                    det[:, :4] = self.scale_coords(img_shape, det[:, :4],src_size).round()
             if det is not None and len(det):
-                det[:, :4] = self.scale_coords(img_shape, det[:, :4],src_size).round()
-                print(det)
-        if det is not None and len(det):
-            self.draw(src_img, det)
+                self.draw(src_img, det)
 
     def plot_one_box(self,x, img, color=None, label=None, line_thickness=None):
         # Plots one bounding box on image img
@@ -234,7 +284,7 @@ class YOLOV5_ONNX(object):
         for *xyxy, conf, cls in boxinfo:
             label = '%s %.2f' % ('image', conf)
             #print('xyxy: ', xyxy)
-            print("img.shape:{}, xyxy:{}".format(img.shape, xyxy))
+            #print("img.shape:{}, xyxy:{}".format(img.shape, xyxy))
             self.plot_one_box(xyxy, img, label=label, color=(0, 0, 255), line_thickness=1)
 
         cv2.namedWindow("dst",0)
@@ -247,7 +297,7 @@ class YOLOV5_ONNX(object):
 def main(opt):
     weights, source, img_size, class_num = opt.weights, opt.source, opt.img_size, opt.class_num
     model=YOLOV5_ONNX(onnx_path=weights, shape=(img_size, img_size), class_num=class_num)
-    model.forward(img_path=source)
+    model.detect(img_path=source)
 
 if __name__=="__main__":
     parser = ArgumentParser(usage="python3 {} --weights --source")
