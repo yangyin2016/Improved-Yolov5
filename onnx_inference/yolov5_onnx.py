@@ -98,6 +98,49 @@ class YOLOV5_ONNX(object):
 
         img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
         return img, ratio, (dw, dh)
+    
+    def img2input(self, img):
+        """
+        将图像转换为可以输入模型的格式 
+        """
+        img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB
+        img = np.ascontiguousarray(img).astype(dtype=np.float32)
+        img /= 255.0
+        img = np.expand_dims(img,axis=0)
+        return img
+
+    def output2bbox(self, preds):
+        """
+        将网络的输出转换为bbox格式 
+        """
+        y = []
+        y.append(torch.tensor(preds[1].reshape(preds[1].shape[0], -1, 5 + self.class_num)).sigmoid())
+        y.append(torch.tensor(preds[2].reshape(preds[2].shape[0], -1, 5 + self.class_num)).sigmoid())
+        y.append(torch.tensor(preds[3].reshape(preds[3].shape[0], -1, 5 + self.class_num)).sigmoid())
+
+        # 处理输出
+        grid = []
+        stride = [8, 16, 32]
+        for f in self.output_size:
+            grid.append([[i, j] for j in range(f[0]) for i in range(f[1])])
+
+        size = self.size
+        z = []
+        for i in range(len(y)):
+            src = y[i]
+            xy = src[..., 0:2] * 2. - 0.5
+            wh = (src[..., 2:4] * 2) ** 2
+            dst_xy = []
+            dst_wh = []
+            for j in range(len(y)):
+                dst_xy.append((xy[:, j * size[i]:(j + 1) * size[i], :] + torch.tensor(grid[i])) * stride[i])
+                dst_wh.append(wh[:, j * size[i]:(j + 1) * size[i], :] * self.anchor[i][j])
+            src[..., 0:2] = torch.from_numpy(np.concatenate((dst_xy[0], dst_xy[1], dst_xy[2]), axis=1))
+            src[..., 2:4] = torch.from_numpy(np.concatenate((dst_wh[0], dst_wh[1], dst_wh[2]), axis=1))
+            z.append(src.view(1, -1, 5 + self.class_num))
+
+        results = torch.cat(z, 1)
+        return results
 
     def xywh2xyxy(self,x):
         '''将网络输出的[x,y,w,h]格式转换为[x1,y1,x2,y2]格式'''
@@ -108,36 +151,6 @@ class YOLOV5_ONNX(object):
         y[:, 3] = x[:, 1] + x[:, 3] / 2  # bottom right y
 
         return y
-
-    def nms(self,prediction, conf_thres=0.1, iou_thres=0.6, agnostic=False):
-        '''非极大抑制'''
-        if prediction.dtype is torch.float16:
-            prediction = prediction.float()  # to FP32
-        xc = prediction[..., 4] > conf_thres  # candidates
-        min_wh, max_wh = 2, 4096  # (pixels) minimum and maximum box width and height
-        max_det = 300  # maximum number of detections per image
-        output = [None] * prediction.shape[0]
-        for xi, x in enumerate(prediction):  # image index, image inference
-            x = x[xc[xi]]  # confidence
-            if not x.shape[0]:
-                continue
-
-            x[:, 5:] *= x[:, 4:5]  # conf = obj_conf * cls_conf
-            box = self.xywh2xyxy(x[:, :4])
-
-            conf, j = x[:, 5:].max(1, keepdim=True)
-            x = torch.cat((torch.tensor(box), conf, j.float()), 1)[conf.view(-1) > conf_thres]
-            n = x.shape[0]  # number of boxes
-            if not n:
-                continue
-            c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes
-            boxes, scores = x[:, :4] + c, x[:, 4]  # boxes (offset by class), scores
-            i = torchvision.ops.boxes.nms(boxes, scores, iou_thres)
-            if i.shape[0] > max_det:  # limit detections
-                i = i[:max_det]
-            output[xi] = x[i]
-
-        return output
 
     def clip_coords(self,boxes, img_shape):
         '''查看bbox是否越界'''
@@ -179,50 +192,21 @@ class YOLOV5_ONNX(object):
         # 读取图片
         src_img = cv2.imread(img_path)
         src_size = src_img.shape[:2]
-        stride = [8, 16, 32]
 
         # 预处理、归一化、维度扩张
         img, ratio, (dw, dh) = self.letterbox(src_img, self.shape, stride=32)
-        img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB
-        img = np.ascontiguousarray(img).astype(dtype=np.float32)
-        img /= 255.0
-        img = np.expand_dims(img,axis=0)
+        img = self.img2input(img)
 
         # 前向推理
         start = time.time()
+
         input_feed = self.get_input_feed(img)
         preds = self.onnx_session.run(output_names=self.output_name,input_feed=input_feed)
-
-        #提取特征
-        y = []
-        y.append(torch.tensor(preds[1].reshape(preds[1].shape[0], -1, 5 + self.class_num)).sigmoid())
-        y.append(torch.tensor(preds[2].reshape(preds[2].shape[0], -1, 5 + self.class_num)).sigmoid())
-        y.append(torch.tensor(preds[3].reshape(preds[3].shape[0], -1, 5 + self.class_num)).sigmoid())
-
-        # 处理输出
-        grid = []
-        for f in self.output_size:
-            grid.append([[i, j] for j in range(f[0]) for i in range(f[1])])
-
-        size = self.size
-        z = []
-        for i in range(len(y)):
-            src = y[i]
-            xy = src[..., 0:2] * 2. - 0.5
-            wh = (src[..., 2:4] * 2) ** 2
-            dst_xy = []
-            dst_wh = []
-            for j in range(len(y)):
-                dst_xy.append((xy[:, j * size[i]:(j + 1) * size[i], :] + torch.tensor(grid[i])) * stride[i])
-                dst_wh.append(wh[:, j * size[i]:(j + 1) * size[i], :] * self.anchor[i][j])
-            src[..., 0:2] = torch.from_numpy(np.concatenate((dst_xy[0], dst_xy[1], dst_xy[2]), axis=1))
-            src[..., 2:4] = torch.from_numpy(np.concatenate((dst_wh[0], dst_wh[1], dst_wh[2]), axis=1))
-            z.append(src.view(1, -1, 5 + self.class_num))
-
-        results = torch.cat(z, 1)
+        results = self.output2bbox(preds)
         results = non_max_suppression(results, conf_thres=0.25, iou_thres=0.45)
-        cast=time.time()-start
-        print("cast time:{}".format(cast))
+
+        end = time.time()
+        print("cost time:{}".format(end - start))
 
         #映射到原始图像
         img_shape=img.shape[2:]
